@@ -1,220 +1,149 @@
-GHOST SHIFT: SYSTEM ARCHITECTURE & HANDOFF BRIEF
+# Ghost Shift
 
-1. System Vision & Core Operating Principles
+**A 1990s hacker terminal that never repeats, run by a tiny AI on a Raspberry Pi.**
 
-Ghost Shift is a 24/7 autonomous terminal art installation running on a dedicated Raspberry Pi 5 (16GB RAM, NVMe storage, active cooling). It simulates a living 1990s computer environment operated by an AI entity across two distinct personas:
+Ghost Shift is a 24/7 art installation. Plug a Raspberry Pi 5 into a monitor, start it, and walk away. The screen shows a retro terminal where an AI "programmer" works through its shift: it thinks, opens an editor, types out a program line by line (making and fixing realistic mistakes along the way), and runs it live. Every program is written by a small language model running **locally on the Pi**, so the piece needs no cloud account and keeps working offline.
 
-Day Shift (07:00–19:00) — The IT Professional
+<!-- TODO: add a screenshot or GIF here, e.g. docs/demo.gif -->
 
-Writes small utility programs (system monitors, ASCII clocks, log parsers, packet sniffers, bouncing ball visualizations).
+## What you see
 
-Executes saved scripts in terminal windows as live visual dashboards.
+Each cycle is a short play in separate, titled windows that grow out of the screen edge and shrink away when they are done:
 
-Performs maintenance theater (df -h, free -m, uptime, tail -f logs, service restarts, fake system diagnostics).
+| Window | What happens |
+|---|---|
+| **THINKING** (or NEURAL SYNTHESIS, COGNITION, PLANNING) | "Investigative" commands (`df -h`, `free -m`, `uptime`, ...) are typed while the model works, with a live htop beside them |
+| **EDITOR :: file.py** | The program is typed into `nano` line by line at human speed, with typos and syntax mistakes that get noticed and fixed |
+| **TESTING** (or EXECUTING, QA SANDBOX, RUNNING TESTS) | The finished program runs live: Game of Life, a Mandelbrot zoom, a packet simulator, ... |
+| **SCREENSAVER** | Matrix-style green rain between scenes (needs `cmatrix`) |
+| **SYSLOG** | A log strip that always stays visible along the bottom |
 
-Reads and responds to synthetic IT support tickets and corporate management emails using mutt and a local Maildir spool.
+Programs come from a catalogue of 28 tasks at three difficulty levels. A shuffle bag makes sure none repeats until all have been shown, and random "voices" and vocabulary keep the code comments from sounding the same.
 
-Night Shift (19:00–07:00) — The Hacker Underground
+Planned: a day/night schedule with work emails by day, and Phrack-style zines plus an IRC channel full of AI users by night (see the [roadmap](#roadmap)).
 
-Writes Phrack-style hacker zines (figlet/toilet banners, numbered .txt issues, rants, harmless pseudo-code exploits) paged with less.
+## How it works
 
-Chats on a local-only IRC server (ngircd/ergo + irssi) with 4–8 AI bot personas.
+The core idea is that **generation and display are separate.** A small model on a Pi manages only a few tokens per second, so the screen never waits on the AI live.
 
-Shift Changes & Maintenance
+```
+ generator_worker ──► validated programs ──► director_desk ──► tmux "desk" windows ──► monitor
+   (local LLM via        (library/ready)       (scenes, timing)    (typist types into them)
+    Ollama, sandbox
+    validation)
+```
 
-Matrix-style falling green code interludes (cmatrix).
+| Module | Role |
+|---|---|
+| `local_llm.py` | Streaming client for Ollama with an idle timeout and a hard deadline; strips thinking blocks and markdown from the output |
+| `codegen.py` | Chooses what to write: task catalogue, shuffle bag, personas, vocabulary, prompt building |
+| `sandbox.py` | AST-based validator for generated Python (import allowlist, blocks dangerous modules) |
+| `generator_worker.py` | Background process that keeps a queue of ready-to-show programs |
+| `director_desk.py` | Orchestrates the scenes |
+| `desk.py` | Tiling window manager on tmux panes: titled windows that open and close with animation |
+| `typist.py` | Human typing: bursts, neighbour-key typos, and syntax mistakes repaired on screen |
+| `telemetry.py` | Wait-state typing of "investigative" shell commands |
+| `stage.py` | tmux session setup and matrix rain |
+| `email_engine.py`, `email_scene.py` | Work-email scene with `mutt` (in progress) |
+| `config.py` | Loads `config.yaml` |
 
-Fake retro BIOS/boot logs transitioning into persona login prompts.
+## Requirements
 
-Nightly 04:00 system reboot staged as a "scheduled patch window."
+- Raspberry Pi 5 (16 GB recommended; a 3B model needs a few GB of RAM) with active cooling. NVMe storage is advised.
+- Raspberry Pi OS based on Debian 13 (Trixie), which is the author's setup. Other Debian-based systems should work.
+- [Ollama](https://ollama.com/download) with a small coding model (default `qwen2.5-coder:3b`).
+- `tmux`, `nano`, and Python 3.11+. `install.sh` installs what it can; `htop`, `cmatrix`, and `mutt` are optional extras it also installs.
 
-Primary Architecture Principle: Separate Generation from Display
+## Quick start
 
-Local LLM generation on the Raspberry Pi 5 runs at ~2–8 tokens/second. The display path must never stall, flicker, or go blank:
+```bash
+git clone https://github.com/VileCommander/ghost-shift.git
+cd ghost-shift
+./install.sh                      # system packages + Python virtualenv
+# install Ollama from https://ollama.com/download, then:
+ollama pull qwen2.5-coder:3b
+```
 
-Background Generator Worker (generator_worker.py): Pre-generates, validates, and queues content into ~/.local/share/ghost-shift/library/ready/.
+Run it from the project root, as Python modules:
 
-Stage & Typist (typist.py / director_desk.py): Replays queued items with realistic human typing simulation into active tmux windows.
-
-Fail-Safe Replay: If queues deplete or models fail, the system falls back to archived programs, previous emails, or maintenance filler.
-
-2. System Environment & Execution Constraints
-
-Target Hardware: Raspberry Pi 5 (16GB RAM, NVMe boot drive).
-
-OS / Base Image: Debian 13 / Trixie-based Raspberry Pi OS.
-
-Project Root: ~/ghost-shift/
-
-Virtual Environment: ~/ghost-shift/venv/
-
-Package Name: ghost_shift (~/ghost-shift/ghost_shift/)
-
-Execution Protocol: All commands must be executed as Python modules from the project root:
-
-cd ~/ghost-shift && source venv/bin/activate
-python3 -m ghost_shift.<module_name>
-
-
-3. Complete Codebase & File Map
-
-/home/ed/
-├── workspace/                       # Executed runtime Python scripts (sys_monitor_*.py)
-├── .local/share/ghost-shift/        # Data storage & library cache
-│   ├── library/
-│   │   ├── ready/                  # Validated scripts ready for display
-│   │   └── archive/                # Historical replay archives
-│   ├── mail/
-│   │   ├── new/                    # Incoming synthetic Maildir emails
-│   │   ├── cur/                    # Processed / read emails
-│   │   └── tmp/
-│   ├── commands_pool.json          # Investigative typing command pool
-│   ├── codegen_state.json          # Task shuffle-bag state tracking
-│   └── ghost.log                   # Persistent system log file
-│
-└── ghost-shift/                    # PROJECT ROOT
-    ├── README.md                   # Full repository documentation
-    ├── config.yaml                 # Master system configuration
-    ├── requirements.txt            # Dependencies (PyYAML, psutil)
-    ├── install.sh                  # Setup script
-    ├── .gitignore                  # Git exclude list
-    └── ghost_shift/                # Core Python Package
-        ├── __init__.py             # Package marker
-        ├── config.py               # Config YAML loader
-        ├── codegen.py              # Task shuffle-bag prompt engine
-        ├── desk.py                 # Tiling tmux window layout manager
-        ├── director_desk.py        # Master Director orchestration loop
-        ├── email_engine.py         # Corporate IT email generator
-        ├── email_scene.py          # Interactive mutt display & reply scene
-        ├── generator_worker.py     # Background queue generator worker
-        ├── local_llm.py            # Fast streaming Ollama HTTP client
-        ├── sandbox.py              # AST-based Python code validator
-        ├── stage.py                # Tmux session initialization & matrix rain
-        ├── telemetry.py            # Wait-state investigative typing commands
-        └── typist.py               # Human typing engine with mistakes/repairs
-
-
-Module Descriptions
-
-ghost_shift/config.py: Loads configuration settings from config.yaml.
-
-ghost_shift/local_llm.py: Streaming HTTP client communicating directly with Ollama (http://localhost:11434/api/generate). Features strip_noise() to strip thinking blocks and markdown wrappers.
-
-ghost_shift/sandbox.py: Uses ast.parse() to statically validate generated Python scripts. Enforces security restrictions (blocking os, sys, subprocess, shutil, ctypes) while allowing standard libraries (time, random, math, curses, psutil).
-
-ghost_shift/codegen.py: Manages a persistent task shuffle-bag (28 tasks across 3 difficulty tiers) so prompts never repeat until all tasks are displayed. Implements comment scrubbing, random visual styles, and variable execution lengths.
-
-ghost_shift/generator_worker.py: Independent background process that continuously invokes local_llm.py, validates scripts via sandbox.py, and maintains a ready queue inside ~/.local/share/ghost-shift/library/ready/.
-
-ghost_shift/typist.py: Simulates realistic human typing into tmux using character bursts, variable WPM, neighbor-key typos, and syntax error self-repairs.
-
-ghost_shift/desk.py: Manages tiled tmux window layouts, titled window status borders, pane splitting, dynamic window expansion/decay, and thinking animations.
-
-ghost_shift/telemetry.py: Drives human-like investigative commands (df -h, free -m, uptime, ps aux, ls -la) during generation wait states using commands_pool.json.
-
-ghost_shift/email_engine.py: Generates synthetic corporate IT emails using local_llm.py and formats them into standard RFC-822 messages stored in Maildir (~/.local/share/ghost-shift/mail/new/).
-
-ghost_shift/email_scene.py: Executes the visual email scene inside tmux: opens mutt, navigates the unread message, simulates reading, pre-generates a concise reply with generate_local, and updates message status to cur/.
-
-ghost_shift/director_desk.py: Main orchestration loop connecting all components: runs wait-state telemetry -> pops pre-generated programs -> opens nano -> types code line-by-line -> executes in sandbox window -> runs interludes.
-
-4. System Configuration Reference (config.yaml)
-
-system:
-  workspace_dir: "~/workspace"
-  data_dir: "~/.local/share/ghost-shift"
-  terminal:
-    font: "Lat2-Terminus16"
-    color_scheme: "amber"
-
-llm:
-  local_model: "qwen2.5-coder:3b"
-  deadline_s: 2400
-
-codegen:
-  allowed_modules: ["time", "random", "math", "psutil", "curses"]
-
-desk:
-  animate: true
-  syslog_cmd: "tail -n 40 -F ~/.local/share/ghost-shift/ghost.log"
-
-typist:
-  base_wpm: 65
-  variance: 25
-  typo_chance: 0.04
-  code_typo_chance: 0.12
-  code_speed: 3.0
-  burst: 3
-  mistake_chance: 0.15
-  max_mistakes_per_block: 5
-  notice_min: 0.1
-  notice_max: 0.3
-  pause_punctuation: 0.4
-  pause_newline: 0.8
-  correction_delay_min: 0.1
-  correction_delay_max: 0.3
-
-
-5. Critical Resolved Issues & Safeguards
-
-Ollama Process Lockup: Replaced ollama run CLI subprocess calls with a direct streaming HTTP API client (local_llm.py).
-
-Nano Buffer Race Conditions: Added key sequence delay buffers and process state verification (wait_until) before exiting nano to eliminate .save backup files.
-
-Autoindent Mangling: nano is explicitly launched with -I (nano -I -E -l -w) to disable auto-indentation during automated typing.
-
-Typist Telemetry Overlap: Fixed thread join behavior using /tmp/ghost_llm_ready.flag so investigative typing immediately yields when a payload is ready.
-
-Tmux Escape Sequences: Semicolons and special characters are escaped (\;) to avoid tmux send-keys argument parsing failures.
-
-6. System Operation Commands
-
-Running the Full System
-
+```bash
 cd ~/ghost-shift && source venv/bin/activate
 
-# Terminal 1: Background Queue Worker
+# terminal 1: background generator
 python3 -m ghost_shift.generator_worker
 
-# Terminal 2: Master Director Display
+# terminal 2: the show
 python3 -m ghost_shift.director_desk --loop --no-rain
+```
 
+Flags for `director_desk`: `--loop` (run forever), `--no-rain` (skip the startup rain), `--no-anim` (no window grow/shrink animation).
 
-Testing Work Email Integration
+`tmux attach` hides normal program output, so everything is logged to a file. To watch what is happening behind the scenes:
 
-cd ~/ghost-shift && source venv/bin/activate
-
-# 1. Generate new IT mail item into Maildir spool
-python3 -m ghost_shift.email_engine
-
-# 2. Initialize ghost tmux session
-python3 -c "from ghost_shift.stage import init_tmux_session; init_tmux_session('ghost')"
-
-# 3. Run interactive mutt email scene
-python3 -m ghost_shift.email_scene
-
-
-Monitoring System Logs
-
+```bash
 tail -f ~/.local/share/ghost-shift/ghost.log
+```
 
-7. Implementation Roadmap
+Look for `task=... diff=...` (what is being written), `[llm] ... tok/s` (model speed), and `program source: llm`, `archived`, or `static` (real AI output, a replayed program, or the built-in fallback). The first program can take several minutes on a Pi while the model writes it.
 
-    Phase 1: Stage & Typist Engine (tmux window manager, human typing speed/mistakes, matrix rain) - [COMPLETED]
+To preview the prompts without calling the model, run `python3 -m ghost_shift.codegen`.
 
-    Phase 2: Decoupled Queue & Local LLM Integration (local_llm.py, generator_worker.py, AST sandbox verification) - [COMPLETED]
+## Configuration
 
-    Phase 3: Work Emails / IT Communications (email_engine.py Maildir spooler, email_scene.py with mutt) - [CORE BUILT, PENDING DIRECTOR INTEGRATION]
+Everything lives in `config.yaml`, and every key is optional.
 
-    Phase 4: Cloud API Router Offloading (OpenAI-compatible fallback router for complex tasks).
+| Section | Keys | Notes |
+|---|---|---|
+| `llm` | `local_model`, `deadline_s` | The model must appear in `ollama list`, otherwise Ollama returns a 404 and the show falls back to replayed programs |
+| `typist` | `base_wpm`, `typo_chance`, `code_speed`, `mistake_chance`, `max_mistakes_per_block`, ... | Full list in the docstring at the top of `ghost_shift/typist.py`. `mistake_chance: 0` turns syntax mistakes off |
+| `codegen` | `allowed_modules` | Imports the model is told it may use (the sandbox must allow them too) |
+| `sandbox` | `allowed_modules`, `max_execution_time` | Static validator settings |
+| `desk` | `animate`, `syslog_cmd` | Window animation, and what the SYSLOG strip shows |
+| `system` | `workspace_dir`, `data_dir` | Where programs and data are stored |
 
-    Phase 5: Night Shift Persona & Hacker Zines (Phrack-style .txt generator, less pager integration).
+Where things live:
 
-    Phase 6: Local IRC Server & Bot Chatters (ngircd + irssi multi-bot persona conversation system).
+```
+~/workspace/                         programs the AI has written and run
+~/.local/share/ghost-shift/
+  ghost.log                          the log
+  codegen_state.json                 shuffle-bag state (delete it to reshuffle)
+  commands_pool.json                 commands typed during THINKING
+  library/ready, library/archive     queued and replayable programs
+  mail/                              synthetic Maildir for the email scene
+```
 
-    Phase 7: Full Hardware Kiosk Deployment (systemd service auto-start, console autologin, watchdog timer).
+## Safety
 
+Ghost Shift **runs code written by an AI model**. The current protections are modest:
 
-8. License
+- Generated code is statically checked with `ast` and must stay within an import allowlist (`os`, `sys`, `subprocess`, `ctypes`, and similar are blocked).
+- Programs run under a hard `timeout`.
 
-MIT License - Free for personal use and art installations.
+The static check is not a security boundary. Run this on a dedicated Pi that holds nothing you care about, and keep API keys in environment variables, never in the repo. OS-level sandboxing (unprivileged user, resource limits, no network) is on the roadmap.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Always the built-in fallback program | Check `ghost.log` for `generation attempt failed`. A 404 means the model name does not match `ollama list` |
+| `ModuleNotFoundError: ghost_shift` | Run from the project root with `python3 -m ghost_shift.<module>` |
+| Screen is stuck or garbled after a crash | `tmux kill-session -t ghost`, then start again |
+| `*.save` files appear | nano was closed with unsaved changes; they are safe to delete |
+| Windows look cramped | Side windows only open on screens at least 140 columns wide |
+
+## Roadmap
+
+- [x] **Phase 1:** stage and typist (tmux window manager, human typing, matrix rain)
+- [x] **Phase 2:** local LLM integration, background generation queue, AST sandbox
+- [ ] **Phase 3:** work emails (Maildir spool and `mutt` scene built; director integration in progress)
+- [ ] **Phase 4:** cloud API offload (free-tier OpenAI-compatible providers with fallback)
+- [ ] **Phase 5:** night shift (Phrack-style zines, day/night schedule, shift-change transitions)
+- [ ] **Phase 6:** local IRC server with AI bot personas
+- [ ] **Phase 7:** kiosk deployment (systemd services, console autologin, watchdog, nightly "patch window" reboot)
+
+More detail is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
