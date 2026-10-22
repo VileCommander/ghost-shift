@@ -198,24 +198,22 @@ Monitoring System Logs
 
 tail -f ~/.local/share/ghost-shift/ghost.log
 
+7. Implementation Roadmap
 
-7. Remaining Implementation Roadmap
+    Phase 1: Stage & Typist Engine (tmux window manager, human typing speed/mistakes, matrix rain) - [COMPLETED]
 
-Phase 4: Cloud API Router Offloading
+    Phase 2: Decoupled Queue & Local LLM Integration (local_llm.py, generator_worker.py, AST sandbox verification) - [COMPLETED]
 
-Build an OpenAI-compatible fallback router chaining free cloud providers (Groq, Gemini, Cerebras, OpenRouter) down to local Ollama.
+    Phase 3: Work Emails / IT Communications (email_engine.py Maildir spooler, email_scene.py with mutt) - [CORE BUILT, PENDING DIRECTOR INTEGRATION]
 
-Phase 5: Night Shift Persona & Hacker Zines
+    Phase 4: Cloud API Router Offloading (OpenAI-compatible fallback router for complex tasks).
 
-Implement Phrack-style text zine generator (figlet/toilet banners, numbered .txt files) and less pager viewer scene.
+    Phase 5: Night Shift Persona & Hacker Zines (Phrack-style .txt generator, less pager integration).
 
-Phase 6: Local IRC Server & Multi-Bot Chatters
+    Phase 6: Local IRC Server & Bot Chatters (ngircd + irssi multi-bot persona conversation system).
 
-Configure local ngircd/ergo server and irssi client scene. Run 4-8 automated background IRC personas exchanging technical banter.
+    Phase 7: Full Hardware Kiosk Deployment (systemd service auto-start, console autologin, watchdog timer).
 
-Phase 7: Full Hardware Kiosk Deployment
-
-Configure Linux console autologin, systemd services with hardware watchdog (Restart=always), sandboxed unprivileged execution, workspace pruning, and automated nightly reboots.
 
 8. License
 
