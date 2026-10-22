@@ -1,0 +1,49 @@
+# Ghost Shift Configuration (Optimized for Pi 5 Speed)
+system:
+  workspace_dir: "~/workspace"
+  data_dir: "~/.local/share/ghost-shift"
+  terminal:
+    font: "Lat2-Terminus16"
+    color_scheme: "amber"
+
+typist:
+  base_wpm: 100
+  variance: 20
+  typo_chance: 0.03
+  correction_delay_min: 0.05
+  correction_delay_max: 0.2
+  pause_punctuation: 0.12
+  pause_newline: 0.4
+
+llm:
+  default_local_model: "qwen3.5:4b"
+  ollama_base_url: "http://localhost:11434/v1"
+  providers:
+    - name: "ollama"
+      type: "openai"
+      base_url: "http://localhost:11434/v1"
+      model: "qwen3.5:4b"
+      api_key_env: ""
+      rpm_limit: 60
+
+sandbox:
+  max_execution_time: 30
+  allowed_modules:
+    - "time"
+    - "datetime"
+    - "random"
+    - "math"
+    - "curses"
+    - "shutil"
+    - "psutil"
+    - "textwrap"
+    - "itertools"
+    - "collections"
+
+llm:
+  local_model: qwen2.5-coder:3b
+  deadline_s: 2400
+
+desk:
+    syslog_cmd: "journalctl -f -n 40 --no-pager"
+    animate: true

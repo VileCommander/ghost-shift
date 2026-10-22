@@ -1,0 +1,13 @@
+# Python virtual environments & bytecode
+venv/
+__pycache__/
+*.pyc
+
+# Temporary flags & runtime data
+/tmp/ghost_*
+*.log
+.local/
+
+# Nano backup files
+*.save
+*.swp
