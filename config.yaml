@@ -1,4 +1,5 @@
-# Ghost Shift Configuration (Optimized for Pi 5 Speed)
+# Ghost Shift configuration (tuned for Raspberry Pi 5)
+
 system:
   workspace_dir: "~/workspace"
   data_dir: "~/.local/share/ghost-shift"
@@ -14,36 +15,29 @@ typist:
   correction_delay_max: 0.2
   pause_punctuation: 0.12
   pause_newline: 0.4
+  # optional (defaults shown):
+  # code_speed: 3.0
+  # mistake_chance: 0.15
+  # max_mistakes_per_block: 5
 
 llm:
-  default_local_model: "qwen3.5:4b"
-  ollama_base_url: "http://localhost:11434/v1"
-  providers:
-    - name: "ollama"
-      type: "openai"
-      base_url: "http://localhost:11434/v1"
-      model: "qwen3.5:4b"
-      api_key_env: ""
-      rpm_limit: 60
+  local_model: "qwen2.5-coder:3b"
+  deadline_s: 2400
+
+# Planned cloud offload (keys come from environment variables, never this file):
+# providers:
+#   - name: groq
+#     base_url: "https://api.groq.com/openai/v1"
+#     model: "llama-3.3-70b-versatile"
+#     api_key_env: "GROQ_API_KEY"
 
 sandbox:
   max_execution_time: 30
-  allowed_modules:
-    - "time"
-    - "datetime"
-    - "random"
-    - "math"
-    - "curses"
-    - "shutil"
-    - "psutil"
-    - "textwrap"
-    - "itertools"
-    - "collections"
+  allowed_modules: [time, datetime, random, math, curses, psutil, textwrap, itertools, collections]
 
-llm:
-  local_model: qwen2.5-coder:3b
-  deadline_s: 2400
+codegen:
+  allowed_modules: [time, random, math]
 
 desk:
-    syslog_cmd: "journalctl -f -n 40 --no-pager"
-    animate: true
+  syslog_cmd: "journalctl -f -n 40 --no-pager"
+  animate: true

@@ -1,13 +1,19 @@
-# Python virtual environments & bytecode
+# Python
 venv/
 __pycache__/
 *.pyc
 
-# Temporary flags & runtime data
-/tmp/ghost_*
+# Runtime data and logs
 *.log
 .local/
+workspace/
 
-# Nano backup files
+# Editor leftovers (nano emergency saves, swap files)
 *.save
+*.save.*
 *.swp
+
+# Secrets and local overrides
+.env
+*.env
+config.local.yaml
