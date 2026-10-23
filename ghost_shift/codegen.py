@@ -27,7 +27,7 @@ import random
 import re
 from pathlib import Path
 
-from ghost_shift.director_phase2_test import FALLBACK_CODE, log
+from ghost_shift.util import FALLBACK_CODE, log
 from ghost_shift.local_llm import generate_local, strip_noise
 from ghost_shift.sandbox import validate_code
 

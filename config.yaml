@@ -41,3 +41,14 @@ codegen:
 desk:
   syslog_cmd: "journalctl -f -n 40 --no-pager"
   animate: true
+
+director:
+  think_seconds: 15      # how long the THINKING window runs before each code scene
+  run_seconds: 120       # hard cap on a live program run
+
+mail:
+  enabled: true
+  every_min: 2           # at least this many code scenes between mail scenes
+  every_max: 4
+  target_unread: 3       # unread messages the worker keeps ready
+  max_read: 30           # read messages kept in the inbox
