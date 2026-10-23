@@ -141,7 +141,7 @@ def run_scene(desk, typist, config: dict) -> bool:
             _bail(pane)
             return False
         desk.title(pane, f"[ COMPOSE :: RE: {subject[:40]} ]")
-        time.sleep(0.8)
+        time.sleep(2.0)
 
         typist.type_text(pane, reply_text)
         time.sleep(1.0)
