@@ -5,6 +5,11 @@
 Ghost Shift is a 24/7 art installation. Plug a Raspberry Pi 5 into a monitor, start it, and walk away. The screen shows a retro terminal where an AI "programmer" works through its shift: it writes programs and runs them live, and it answers work email from a cast of difficult colleagues. Everything is typed line by line at human speed, mistakes included. All the writing is done by a small language model running **locally on the Pi**, so the piece needs no cloud account and keeps working offline.
 
 <!-- TODO: add a screenshot or GIF here, e.g. docs/demo.gif -->
+<img width="1279" height="680" alt="Screenshot_20261023_183113" src="https://github.com/user-attachments/assets/2451cca9-73a3-434b-9b3d-1d67c50498fc" />
+<img width="1279" height="680" alt="Screenshot_20261023_183147" src="https://github.com/user-attachments/assets/b3eabe82-cdac-455b-b6c7-e5ad69b7c040" />
+
+
+
 
 ## What you see
 
