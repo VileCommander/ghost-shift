@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 from ghost_shift import email_engine as mail
-from ghost_shift.util import SHELLS, log, pane_command, send, wait_until
+from ghost_shift.util import (SHELLS, log, pane_command, pane_text, send,
+                              wait_for_text, wait_until)
 
 RC_PATH = mail.DATA_DIR / "muttrc"
 SENDMAIL_PATH = mail.DATA_DIR / "ghost-sendmail"
@@ -87,6 +88,12 @@ def write_support_files() -> Path:
     return RC_PATH
 
 
+def _snapshot(pane: str, why: str) -> None:
+    """Record what is on screen when something goes wrong (for debugging)."""
+    text = pane_text(pane).rstrip()
+    log(f"[!] {why}; screen was:\n" + "\n".join(text.splitlines()[-18:]))
+
+
 def _bail(pane: str) -> None:
     """Best-effort exit from whatever is on screen so the window can close."""
     for keys in (("C-c",), ("q",), ("q",)):
@@ -95,6 +102,10 @@ def _bail(pane: str) -> None:
         except Exception:
             return
         time.sleep(0.3)
+
+
+def _sent_count() -> int:
+    return len(list(mail.SENT_DIR.glob("*.eml")))
 
 
 def run_scene(desk, typist, config: dict) -> bool:
@@ -122,7 +133,7 @@ def run_scene(desk, typist, config: dict) -> bool:
         time.sleep(0.5)
         typist.type_text(pane, f"mutt -F {RC_DISPLAY}\n")
         if not wait_until(lambda: pane_command(pane) == "mutt", timeout=15):
-            log("[!] mutt did not start (is it installed? sudo apt install mutt)")
+            _snapshot(pane, "mutt did not start (is it installed? sudo apt install mutt)")
             return False
         time.sleep(2.0)
 
@@ -133,15 +144,19 @@ def run_scene(desk, typist, config: dict) -> bool:
 
         desk.title(pane, f"[ MAIL :: {subject[:44]} ]")
         send(pane, "Enter")                              # open the message
+        if not wait_for_text(pane, subject[:25], timeout=8):
+            _snapshot(pane, "the message did not open as expected")
         time.sleep(min(12.0, 3.0 + len(info["body"]) / 40.0))   # "read" it
 
         send(pane, "r")                                  # reply -> nano opens
-        if not wait_until(lambda: pane_command(pane) == "nano", timeout=15):
-            log("[!] reply editor did not open")
+        # nano runs inside mutt's process group, so tmux keeps reporting "mutt"
+        # as the pane command. Look for nano's title bar on screen instead.
+        if not wait_for_text(pane, "GNU nano", timeout=20):
+            _snapshot(pane, "reply editor did not open")
             _bail(pane)
             return False
         desk.title(pane, f"[ COMPOSE :: RE: {subject[:40]} ]")
-        time.sleep(2.0)
+        time.sleep(0.8)
 
         typist.type_text(pane, reply_text)
         time.sleep(1.0)
@@ -150,16 +165,21 @@ def run_scene(desk, typist, config: dict) -> bool:
         time.sleep(0.8)
         send(pane, "Enter")
         time.sleep(0.8)
-        send(pane, "C-x")                                # back to mutt
-        if not wait_until(lambda: pane_command(pane) == "mutt", timeout=15):
-            log("[!] nano did not return to mutt")
+        send(pane, "C-x")                                # back to mutt's compose menu
+        if not wait_for_text(pane, "Compose", timeout=15):
+            _snapshot(pane, "did not return to the compose menu")
             _bail(pane)
             return False
         time.sleep(1.2)
 
+        before = _sent_count()
         send(pane, "y")                                  # send
-        time.sleep(1.5)
-        desk.title(pane, "[ MAIL SENT ]")
+        delivered = wait_until(lambda: _sent_count() > before, timeout=10)
+        if delivered:
+            log(f"[+] reply sent for {subject!r}")
+            desk.title(pane, "[ MAIL SENT ]")
+        else:
+            _snapshot(pane, "reply was not delivered (y did not send)")
         time.sleep(1.0)
 
         send(pane, "q")                                  # pager -> index
@@ -168,10 +188,11 @@ def run_scene(desk, typist, config: dict) -> bool:
         wait_until(lambda: pane_command(pane) in SHELLS or pane_command(pane) == "",
                    timeout=15)
         time.sleep(1.0)
-        mail.discard_prepared(target)
-        ok = True
-        return True
+        ok = delivered
+        return delivered
     finally:
         desk.close(pane)
+        mail.mark_read(target)           # never show the same email forever
+        mail.discard_prepared(target)
         if not ok:
             log("[!] mail scene ended early")

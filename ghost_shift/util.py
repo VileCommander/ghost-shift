@@ -62,3 +62,18 @@ def wait_until(predicate, timeout: float, poll: float = 0.5) -> bool:
             return True
         time.sleep(poll)
     return False
+
+
+def pane_text(target: str) -> str:
+    """Visible text of a pane ("" if it no longer exists)."""
+    try:
+        return tmux("capture-pane", "-p", "-t", target)
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def wait_for_text(target: str, needles, timeout: float, poll: float = 0.5) -> bool:
+    """Wait until any of the given strings appears on the pane's screen."""
+    if isinstance(needles, str):
+        needles = [needles]
+    return wait_until(lambda: any(n in pane_text(target) for n in needles), timeout, poll)

@@ -35,7 +35,7 @@ def ensure_directories():
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def fill_ready_queue(config: dict, target_count: int = 3):
+def fill_ready_queue(config: dict, target_count: int = 3, max_new: int = None):
     """Generate new scripts until the ready queue holds target_count."""
     ensure_directories()
     current_count = len(list(READY_DIR.glob("*.py")))
@@ -43,6 +43,8 @@ def fill_ready_queue(config: dict, target_count: int = 3):
         return
 
     needed = target_count - current_count
+    if max_new is not None:
+        needed = min(needed, max_new)
     say(f"[*] Ready queue count: {current_count}/{target_count}. Generating {needed} new script(s)...")
 
     for _ in range(needed):
@@ -133,7 +135,7 @@ def run_worker_loop():
 
     while True:
         try:
-            fill_ready_queue(config, target_count=3)
+            fill_ready_queue(config, target_count=3, max_new=1)
         except Exception as e:
             say(f"[-] Worker error: {e}")
 

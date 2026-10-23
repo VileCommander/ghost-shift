@@ -112,6 +112,10 @@ BANNED_SUBS = [
     (re.compile(r"\bquantum\b", re.I), "batch"),
 ]
 
+PLACEHOLDER_WORDS = ("insert", "enter", "your", "recipient", "sender", "company",
+                     "placeholder", "fill in", "tbd", "name", "date", "time",
+                     "ticket", "node", "service", "system", "signature", "xx")
+
 EMAIL_SYSTEM = "You write realistic, concise workplace emails. Output the email body only."
 REPLY_SYSTEM = "You write short, natural workplace replies. Output the reply text only."
 
@@ -121,6 +125,29 @@ _last_ts = 0
 # --------------------------------------------------------------------------
 # text helpers
 # --------------------------------------------------------------------------
+def fix_placeholders(text: str) -> str:
+    """Replace or drop placeholder text such as [insert date] or [Your Name]."""
+    def swap(match):
+        inner = match.group(0)[1:-1].lower()
+        if re.search(r"\d", inner) or not any(w in inner for w in PLACEHOLDER_WORDS):
+            return match.group(0)            # e.g. [OK], [ALERT], [TICKET #4521]
+        if "date" in inner:
+            return time.strftime("%B %d")
+        if "time" in inner:
+            return random.choice(["10am", "2pm", "4pm", "end of day"])
+        if "ticket" in inner:
+            return f"#{random.randint(4000, 5999)}"
+        if "node" in inner:
+            return f"node-{random.randint(1, 19):02d}"
+        if any(w in inner for w in ("service", "system", "application", "software")):
+            return random.choice(SERVICES)
+        return ""                            # names, signatures, "insert ..." etc.
+    text = re.sub(r"\[[^\]\n]{1,40}\]", swap, text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+([,.;:!?])", r"\1", text)
+    return "\n".join(ln.rstrip() for ln in text.splitlines())
+
+
 def clean_body(text: str) -> str:
     """Strip thinking blocks, fences, header lines and banned words."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
@@ -131,6 +158,7 @@ def clean_body(text: str) -> str:
     lines = [ln.rstrip() for ln in text.splitlines()
              if not re.match(r"\s*(subject|from|to|date|cc)\s*:", ln, re.I)]
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    text = fix_placeholders(text)
     for pattern, replacement in BANNED_SUBS:
         text = pattern.sub(replacement, text)
     return text
@@ -253,6 +281,15 @@ def unread_messages() -> list:
     return sorted(files, key=_sent_timestamp)
 
 
+def mark_read(path) -> None:
+    """Move a message from new/ to cur/ as read (what mutt does on exit).
+
+    Used when a scene fails, so the same email is not shown forever."""
+    p = Path(path)
+    if p.exists() and p.parent == NEW_DIR:
+        os.replace(p, CUR_DIR / f"{p.name}:2,S")
+
+
 # --------------------------------------------------------------------------
 # prepared replies
 # --------------------------------------------------------------------------
@@ -314,6 +351,7 @@ def _body_prompt(persona: dict, subject: str, project) -> str:
         "Rules: 3 to 5 sentences. Plain text only. No subject line, no headers, no markdown. "
         "Greet Ed and sign off with the sender's first name.",
         "Never use the words heap, buffer, neural or quantum.",
+        "Use concrete details. Never write placeholders in square brackets such as [insert date] or [Your Name].",
     ]
     if project:
         lines.insert(3, f"Refer to Ed's recent work: {project}.")
@@ -324,7 +362,8 @@ def _reply_prompt(persona: dict, subject: str, body: str) -> str:
     return (
         "Write Ed's reply to the email below. Ed is a calm, slightly sarcastic IT engineer.\n"
         "Rules: 2 to 4 sentences, plain text, first person, no headers, no markdown, "
-        "sign off with just 'Ed'. Never use the words heap, buffer, neural or quantum.\n\n"
+        "sign off with just 'Ed'. Never use the words heap, buffer, neural or quantum. "
+        "Never write placeholders in square brackets such as [insert date].\n\n"
         f"From: {persona['name']}\nSubject: {subject}\n\n{body}\n\n"
         "Reply:"
     )
