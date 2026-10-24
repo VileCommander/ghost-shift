@@ -6,15 +6,21 @@ Background generator that decouples LLM generation time from the live display.
 Keeps two queues topped up:
   * library/ready/   validated, ready-to-type Python programs
   * the Maildir      unread work emails, each with a prepared reply
-Programs are saved as <slug>_<time>_<id>.py so file names stay meaningful.
+
+Every program is smoke-tested headlessly. A crashing program gets a ticket from
+the manager (tickets.py) and the coder (debugger.py) tries to fix it. If a fix
+is found, the buggy original is queued together with a <name>.story.json
+sidecar, so the director can show the crash and the on-screen fix. Programs
+that cannot be fixed are dropped. Programs are named <slug>_<time>_<id>.py.
 """
 
+import json
 import random
 import time
 import uuid
 from pathlib import Path
 
-from ghost_shift import email_engine
+from ghost_shift import debugger, email_engine, tickets
 from ghost_shift.codegen import generate_program, slug
 from ghost_shift.config import load_config
 from ghost_shift.sandbox import validate_code
@@ -22,6 +28,14 @@ from ghost_shift.util import log
 
 READY_DIR = Path("~/.local/share/ghost-shift/library/ready").expanduser()
 ARCHIVE_DIR = Path("~/.local/share/ghost-shift/library/archive").expanduser()
+
+STATIC_FALLBACK = (
+    "# [SYSTEM RECOVERY INITIALIZED]\n"
+    "import time\nimport random\n\n"
+    "for cycle in range(30):\n"
+    "    print(f'[ DECK TELEMETRY ] Node {cycle:02d}/30 | Load: {random.randint(15, 95)}% [NOMINAL]')\n"
+    "    time.sleep(2)\n"
+)
 
 
 def say(msg: str) -> None:
@@ -33,6 +47,46 @@ def ensure_directories():
     """Creates persistent library storage directories if they do not exist."""
     READY_DIR.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _stem(name: str) -> str:
+    """Task name from '<slug>_<time>_<id>.py' ('sysmon' for old-style names)."""
+    stem = Path(name).stem
+    if stem.count("_") >= 2:
+        stem = stem.rsplit("_", 2)[0]
+        if stem != "gen":
+            return stem
+    return "sysmon"
+
+
+def _queue_one(config: dict, cleaned: str, task: str) -> None:
+    """Smoke-test one validated program, debug it if needed, and queue it."""
+    name = f"{task}_{int(time.time())}_{uuid.uuid4().hex[:6]}.py"
+    dbg = config.get("debug", {})
+
+    if dbg.get("enabled", True):
+        result = debugger.smoke_test(cleaned, name=name,
+                                     wall_timeout=dbg.get("smoke_timeout", 40))
+        if not result["ok"]:
+            say(f"[!] {name} crashes: {result['error']}")
+            ticket = tickets.open_ticket(name, task, result["error"],
+                                         result["traceback"], source="worker")
+            say(f"[*] ticket #{ticket['id']} opened; the coder is on it")
+            story = debugger.debug_program(config, cleaned, name, task, result, ticket)
+            if story["status"] == "fixed":
+                (READY_DIR / name).write_text(cleaned)
+                (READY_DIR / name.replace(".py", ".story.json")).write_text(json.dumps(story))
+                tickets.update_ticket(ticket["id"], status="fix_ready",
+                                      attempts=story["attempts"])
+                say(f"[+] ticket #{ticket['id']}: fix ready after {story['attempts']} attempt(s); queued {name}")
+            else:
+                tickets.close_ticket(ticket["id"], "unfixed", attempts=story["attempts"])
+                tickets.mark_bad(name)
+                say(f"[-] ticket #{ticket['id']}: could not fix after {story['attempts']} attempt(s); dropped")
+            return
+
+    (READY_DIR / name).write_text(cleaned)
+    say(f"[+] Added fresh program to ready queue: {name}")
 
 
 def fill_ready_queue(config: dict, target_count: int = 3, max_new: int = None):
@@ -50,13 +104,12 @@ def fill_ready_queue(config: dict, target_count: int = 3, max_new: int = None):
     for _ in range(needed):
         try:
             code = generate_program(config)
+            task = slug()
             if code:
                 # Security double-check
                 is_safe, _, cleaned = validate_code(code)
                 if is_safe and len(cleaned.strip()) >= 20:
-                    filename = f"{slug()}_{int(time.time())}_{uuid.uuid4().hex[:6]}.py"
-                    (READY_DIR / filename).write_text(cleaned)
-                    say(f"[+] Added fresh program to ready queue: {filename}")
+                    _queue_one(config, cleaned, task)
                 else:
                     say("[-] Generated program failed sandbox verification.")
             else:
@@ -66,58 +119,53 @@ def fill_ready_queue(config: dict, target_count: int = 3, max_new: int = None):
         time.sleep(2)
 
 
-def pop_ready_program(config: dict) -> tuple[str, str]:
+def pop_ready_item(config: dict) -> dict:
     """
-    Pull the next ready program from library/ready/, keep a copy in
-    library/archive/, and return (code_string, source_type).
+    Take the next program: {"code", "source", "stem", "story", "name"}. A queued program
+    is archived (the FIXED version if it came with a story). With an empty queue
+    an archived program is replayed, skipping any the manager marked as bad.
     """
     ensure_directories()
-    ready_files = sorted(READY_DIR.glob("*.py"))
+    ready = sorted(READY_DIR.glob("*.py"))
 
-    if ready_files:
-        target = ready_files[0]
+    if ready:
+        target = ready[0]
         code = target.read_text()
-        (ARCHIVE_DIR / target.name).write_text(code)
+        story = None
+        sidecar = target.with_suffix(".story.json")
+        if sidecar.exists():
+            try:
+                story = json.loads(sidecar.read_text())
+            except Exception:
+                story = None
+            sidecar.unlink(missing_ok=True)
+        archive_code = (story or {}).get("fixed_code") or code
+        (ARCHIVE_DIR / target.name).write_text(archive_code)
         target.unlink()
-        return code, "llm_queued"
+        return {"code": code, "source": "llm_queued", "stem": _stem(target.name),
+                "story": story, "name": target.name}
 
-    # Queue empty: replay from the archive
-    archived = list(ARCHIVE_DIR.glob("*.py"))
+    bad = tickets.bad_programs()
+    archived = [p for p in ARCHIVE_DIR.glob("*.py") if p.name not in bad]
     if archived:
-        return random.choice(archived).read_text(), "archived"
+        pick = random.choice(archived)
+        return {"code": pick.read_text(), "source": "archived",
+                "stem": _stem(pick.name), "story": None, "name": pick.name}
 
-    # Nothing anywhere: static fallback
-    fallback = (
-        "# [SYSTEM RECOVERY INITIALIZED]\n"
-        "import time\nimport random\n\n"
-        "for cycle in range(30):\n"
-        "    print(f'[ DECK TELEMETRY ] Node {cycle:02d}/30 | Load: {random.randint(15, 95)}% [NOMINAL]')\n"
-        "    time.sleep(2)\n"
-    )
-    return fallback, "static"
+    return {"code": STATIC_FALLBACK, "source": "static", "stem": "sysmon", "story": None,
+            "name": ""}
 
 
 def pop_ready_named(config: dict) -> tuple[str, str, str]:
-    """Like pop_ready_program, but also returns a file-name stem such as 'mazesolver'."""
-    ensure_directories()
-    ready = sorted(READY_DIR.glob("*.py"))
-    stem = "sysmon"
-    if ready and ready[0].stem.count("_") >= 2:
-        stem = ready[0].stem.rsplit("_", 2)[0]
-        if stem == "gen":          # old-style names from before slugs existed
-            stem = "sysmon"
-    if not ready:
-        archived = list(ARCHIVE_DIR.glob("*.py"))
-        if archived:
-            pick = random.choice(archived)
-            stem = "sysmon"
-            if pick.stem.count("_") >= 2:
-                stem = pick.stem.rsplit("_", 2)[0]
-                if stem == "gen":
-                    stem = "sysmon"
-            return pick.read_text(), "archived", stem
-    code, source = pop_ready_program(config)
-    return code, source, stem
+    """Compatibility wrapper: (code, source, stem)."""
+    item = pop_ready_item(config)
+    return item["code"], item["source"], item["stem"]
+
+
+def pop_ready_program(config: dict) -> tuple[str, str]:
+    """Compatibility wrapper: (code, source)."""
+    item = pop_ready_item(config)
+    return item["code"], item["source"]
 
 
 def run_worker_loop():
