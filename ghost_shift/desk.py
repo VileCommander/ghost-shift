@@ -1,3 +1,4 @@
+
 """
 ghost_shift/desk.py
 -------------------
@@ -9,16 +10,23 @@ looks like windows are being summoned and dismissed instead of one static
 terminal.
 
 Layout model
-  * A permanent SYSLOG pane (the "base") lives at the bottom and fills the
-    whole screen whenever no other window is open.
-  * Stage windows open ABOVE it, leaving a small SYSLOG strip visible.
+  * A permanent BASE pane lives at the bottom. Between scenes it fills the
+    screen showing the "idle" content; while a scene is open it shrinks to a
+    strip showing the "strip" content.
+  * Stage windows open ABOVE it.
   * Side windows (htop etc.) open to the RIGHT of a stage window.
+
+Strip / idle content: "off" (a blank 1-row sliver), "syslog" (the log),
+"tickets" (the manager's board), "clock", or "matrix" (needs cmatrix).
 
 Panes are addressed by tmux pane id (like "%7"). Pass that id anywhere the old
 code passed the session name, e.g. typist.type_text(pane_id, "ls\\n").
 """
 
+import shlex
+import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -55,15 +63,21 @@ class Pulse:
         self._thread.join(timeout=2)
 
 
-class Desk:
-    SYSLOG_LINES = 9  # height of the log strip left under stage windows
+BASE_TITLES = {"syslog": "[ SYSLOG ]", "tickets": "[ TICKET BOARD ]",
+               "clock": "[ CLOCK ]", "matrix": "[ SCREENSAVER ]"}
 
+
+class Desk:
     def __init__(
         self,
         session: str = "ghost",
         syslog_cmd: str | None = None,
         animate: bool = True,
         step_delay: float = 0.03,
+        strip: str = "off",
+        strip_lines: int = 9,
+        idle: str = "syslog",
+        project_dir=None,
     ):
         self.session = session
         self.animate = animate
@@ -71,12 +85,19 @@ class Desk:
         self.syslog_cmd = syslog_cmd or (
             "tail -n 40 -F ~/.local/share/ghost-shift/ghost.log"
         )
+        self.strip = strip
+        self.idle = idle
+        # "off" leaves a 1-row sliver (tmux cannot give a pane zero rows)
+        self.strip_lines = 2 if strip == "off" else max(3, int(strip_lines))
+        self.project_dir = project_dir
         self.base: str = ""
         self._horizontal: dict[str, bool] = {}
+        self._stages: set[str] = set()
+        self._status_extra = ""
 
     # ------------------------------------------------------------------ setup
     def setup(self) -> None:
-        """Style the session and turn the first pane into the SYSLOG pane."""
+        """Style the session and turn the first pane into the base pane."""
         s = self.session
         window_opts = [
             ("pane-border-status", "top"),
@@ -97,14 +118,44 @@ class Desk:
             ("status-style", "bg=black,fg=colour46"),
             ("status-left-length", "40"),
             ("status-left", "[ GHOST-SHIFT ] "),
+            ("status-right-length", "90"),
             ("status-right", "%H:%M:%S  %a %d-%b-%Y "),
         ]
         for key, val in session_opts:
             _tmux("set-option", "-t", s, key, val, check=False)
 
         self.base = _tmux("list-panes", "-t", s, "-F", "#{pane_id}").splitlines()[0]
-        _tmux("respawn-pane", "-k", "-t", self.base, self.syslog_cmd, check=False)
-        self.title(self.base, "[ SYSLOG ]")
+        self._set_base(self.idle)
+
+    def set_status_extra(self, text: str) -> None:
+        """Show extra text (e.g. the ticket totals) in the status bar."""
+        self._status_extra = text
+        safe = text.replace("#", "##")
+        right = f"{safe}   " if safe else ""
+        _tmux("set-option", "-t", self.session, "status-right",
+              f"{right}%H:%M:%S  %a %d-%b-%Y ", check=False)
+
+    # ------------------------------------------------------------ base pane
+    def _command_for(self, mode: str) -> str:
+        if mode == "syslog":
+            return self.syslog_cmd
+        if mode == "tickets":
+            return (f"watch -t -n 5 {shlex.quote(sys.executable)} "
+                    "-m ghost_shift.tickets --board")
+        if mode == "clock":
+            return "watch -t -n 1 date '+%H:%M:%S   %a %d %b %Y'"
+        if mode == "matrix" and shutil.which("cmatrix"):
+            return "cmatrix -ab -C green"
+        if mode == "matrix":
+            return self._command_for("clock")
+        return "tail -f /dev/null"                    # "off": blank
+
+    def _set_base(self, mode: str) -> None:
+        args = ["respawn-pane", "-k", "-t", self.base]
+        if self.project_dir:
+            args += ["-c", str(self.project_dir)]
+        _tmux(*args, self._command_for(mode), check=False)
+        self.title(self.base, BASE_TITLES.get(mode, " "))
 
     # ---------------------------------------------------------------- queries
     def dims(self, pane: str) -> tuple[int, int]:
@@ -133,19 +184,22 @@ class Desk:
 
         where: 'top' | 'bottom' | 'left' | 'right' (relative to anchor).
         size:  fraction of the anchor's width/height. When opening 'top' above
-               the base SYSLOG pane, the window fills everything except a
-               SYSLOG strip regardless of `size`.
+               the base pane, the window fills everything except the strip.
         command: program to run in the window (window closes when it exits);
                  omit for an interactive shell you can type into.
         """
         anchor = anchor or self.base
+        top_level = where == "top" and anchor == self.base
+        if top_level and not self._stages:
+            self._set_base(self.strip)               # idle screen -> thin strip
+
         aw, ah = self.dims(anchor)
         horizontal = where in ("left", "right")
         before = where in ("top", "left")
         total = aw if horizontal else ah
 
-        if where == "top" and anchor == self.base:
-            final = total - self.SYSLOG_LINES
+        if top_level:
+            final = total - self.strip_lines
         else:
             final = int(total * size)
         final = max(final, 6)
@@ -165,6 +219,8 @@ class Desk:
 
         pane = _tmux(*args)
         self._horizontal[pane] = horizontal
+        if top_level:
+            self._stages.add(pane)
         self.title(pane, f"[ {title} ]")
         self._grow(pane, horizontal, start, final)
         _tmux("select-pane", "-t", pane, check=False)
@@ -179,15 +235,20 @@ class Desk:
             w, h = self.dims(pane)
             current = w if horizontal else h
         except Exception:
-            return  # already gone
-        if self.animate and current > 3:
-            flag = "-x" if horizontal else "-y"
-            steps = 8
-            for i in range(1, steps + 1):
-                n = max(3, current - (current - 3) * i // steps)
-                _tmux("resize-pane", "-t", pane, flag, str(n), check=False)
-                time.sleep(self.step_delay)
-        _tmux("kill-pane", "-t", pane, check=False)
+            current = 0   # already gone
+        if current:
+            if self.animate and current > 3:
+                flag = "-x" if horizontal else "-y"
+                steps = 8
+                for i in range(1, steps + 1):
+                    n = max(3, current - (current - 3) * i // steps)
+                    _tmux("resize-pane", "-t", pane, flag, str(n), check=False)
+                    time.sleep(self.step_delay)
+            _tmux("kill-pane", "-t", pane, check=False)
+        if pane in self._stages:
+            self._stages.discard(pane)
+            if not self._stages:
+                self._set_base(self.idle)            # strip -> idle screen
 
     def cleanup(self) -> None:
         """Kill every window except the base. Call before and after scenes."""
@@ -195,6 +256,9 @@ class Desk:
             if pane != self.base:
                 _tmux("kill-pane", "-t", pane, check=False)
         self._horizontal.clear()
+        if self._stages:
+            self._stages.clear()
+            self._set_base(self.idle)
 
     def pulse_title(self, pane: str, text: str) -> Pulse:
         return Pulse(self, pane, text)
